@@ -7,9 +7,16 @@ export interface QueryResult {
 }
 
 export class SQLEngine {
+  private static readonly MAX_QUERY_LENGTH = 10000;
+  
   constructor(private data: CSVRow[]) {}
 
   execute(query: string): QueryResult {
+    // Prevent ReDoS by limiting query length
+    if (query.length > SQLEngine.MAX_QUERY_LENGTH) {
+      throw new Error('Query is too long');
+    }
+    
     const normalizedQuery = query.trim().toLowerCase();
 
     if (normalizedQuery.startsWith('select')) {
@@ -57,26 +64,54 @@ export class SQLEngine {
     orderBy?: { column: string; direction: 'asc' | 'desc' };
     limit: number | null;
   } {
-    const selectMatch = query.match(/select\s+(.*?)\s+from/i);
-    if (!selectMatch) {
+    // Normalize whitespace to prevent ReDoS
+    const normalizedQuery = query.replace(/\s+/g, ' ').trim();
+    
+    // Use simple indexOf-based parsing instead of complex regex
+    const selectIdx = normalizedQuery.toLowerCase().indexOf('select ');
+    const fromIdx = normalizedQuery.toLowerCase().indexOf(' from');
+    
+    if (selectIdx === -1 || fromIdx === -1 || fromIdx <= selectIdx) {
       throw new Error('Invalid SELECT query: missing FROM clause');
     }
 
-    const columnsStr = selectMatch[1].trim();
+    const columnsStr = normalizedQuery.substring(selectIdx + 7, fromIdx).trim();
     const columns = columnsStr === '*' 
       ? ['*'] 
       : columnsStr.split(',').map(c => c.trim());
 
-    const whereMatch = query.match(/where\s+(.*?)(?:\s+order\s+by|\s+limit|\s*$)/i);
-    const where = whereMatch ? whereMatch[1].trim() : undefined;
+    // Extract WHERE clause
+    const whereIdx = normalizedQuery.toLowerCase().indexOf(' where ', fromIdx);
+    const orderByIdx = normalizedQuery.toLowerCase().indexOf(' order by', fromIdx);
+    const limitIdx = normalizedQuery.toLowerCase().indexOf(' limit', fromIdx);
+    
+    let where: string | undefined;
+    if (whereIdx !== -1) {
+      const whereEnd = orderByIdx !== -1 ? orderByIdx : (limitIdx !== -1 ? limitIdx : normalizedQuery.length);
+      where = normalizedQuery.substring(whereIdx + 7, whereEnd).trim();
+    }
 
-    const orderByMatch = query.match(/order\s+by\s+(\w+)(?:\s+(asc|desc))?/i);
-    const orderBy = orderByMatch 
-      ? { column: orderByMatch[1], direction: (orderByMatch[2]?.toLowerCase() || 'asc') as 'asc' | 'desc' }
-      : undefined;
+    // Extract ORDER BY
+    let orderBy: { column: string; direction: 'asc' | 'desc' } | undefined;
+    if (orderByIdx !== -1) {
+      const orderByEnd = limitIdx !== -1 ? limitIdx : normalizedQuery.length;
+      const orderByStr = normalizedQuery.substring(orderByIdx + 10, orderByEnd).trim();
+      const parts = orderByStr.split(' ');
+      orderBy = {
+        column: parts[0],
+        direction: (parts[1]?.toLowerCase() === 'desc' ? 'desc' : 'asc')
+      };
+    }
 
-    const limitMatch = query.match(/limit\s+(\d+)/i);
-    const limit = limitMatch ? parseInt(limitMatch[1], 10) : null;
+    // Extract LIMIT
+    let limit: number | null = null;
+    if (limitIdx !== -1) {
+      const limitStr = normalizedQuery.substring(limitIdx + 7).trim();
+      const limitNum = parseInt(limitStr, 10);
+      if (!isNaN(limitNum) && limitNum > 0) {
+        limit = limitNum;
+      }
+    }
 
     return { columns, where, orderBy, limit };
   }
@@ -88,62 +123,84 @@ export class SQLEngine {
   }
 
   private evaluateCondition(row: CSVRow, condition: string): boolean {
-    // Support AND/OR operators
-    if (condition.toLowerCase().includes(' or ')) {
-      const parts = condition.split(/\s+or\s+/i);
+    // Normalize whitespace
+    const normalized = condition.replace(/\s+/g, ' ').trim();
+    const lowerCondition = normalized.toLowerCase();
+    
+    // Support AND/OR operators - use indexOf for safety
+    if (lowerCondition.indexOf(' or ') !== -1) {
+      const parts = normalized.split(/ or /i);
       return parts.some(part => this.evaluateCondition(row, part.trim()));
     }
 
-    if (condition.toLowerCase().includes(' and ')) {
-      const parts = condition.split(/\s+and\s+/i);
+    if (lowerCondition.indexOf(' and ') !== -1) {
+      const parts = normalized.split(/ and /i);
       return parts.every(part => this.evaluateCondition(row, part.trim()));
     }
 
     // Parse simple conditions: column operator value
-    const operators = ['>=', '<=', '!=', '=', '>', '<', ' like '];
+    // Use indexOf-based parsing to avoid ReDoS
+    const operators = [
+      { op: '>=', len: 2 },
+      { op: '<=', len: 2 },
+      { op: '!=', len: 2 },
+      { op: '>', len: 1 },
+      { op: '<', len: 1 },
+      { op: '=', len: 1 }
+    ];
     
-    for (const op of operators) {
-      const opRegex = op === ' like ' 
-        ? /(\w+)\s+like\s+['"](.+)['"]/i
-        : new RegExp(`(\\w+)\\s*${op.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*(.+)`, 'i');
+    // Check for LIKE operator first
+    const likeIdx = lowerCondition.indexOf(' like ');
+    if (likeIdx !== -1) {
+      const column = normalized.substring(0, likeIdx).trim();
+      const afterLike = normalized.substring(likeIdx + 6).trim();
       
-      const match = condition.match(opRegex);
-      if (match) {
-        const column = match[1];
-        let value: string | number = match[2].replace(/['"]/g, '').trim();
+      // Extract value from quotes
+      const quoteMatch = afterLike.match(/^['"]([^'"]+)['"]$/);
+      if (quoteMatch && column in row) {
+        const pattern = quoteMatch[1].replace(/%/g, '.*');
+        return new RegExp(`^${pattern}$`, 'i').test(String(row[column]));
+      }
+      return false;
+    }
+    
+    // Check for comparison operators
+    for (const { op, len } of operators) {
+      const opIdx = normalized.indexOf(op);
+      if (opIdx > 0) {
+        const column = normalized.substring(0, opIdx).trim();
+        let value: string | number = normalized.substring(opIdx + len).trim().replace(/['"]/g, '');
         
         if (!(column in row)) {
-          return false;
+          continue; // Try next operator
         }
 
         const rowValue = row[column];
         
-        // Try to convert value to number if comparing with number
+        // Convert value to the same type as rowValue for comparison
+        let compareValue: string | number = value;
         if (typeof rowValue === 'number') {
           const numValue = parseFloat(value as string);
           if (!isNaN(numValue)) {
-            value = numValue;
+            compareValue = numValue;
           }
+        } else if (typeof rowValue === 'string' && typeof value === 'number') {
+          compareValue = String(value);
         }
 
-        switch (op.trim()) {
+        switch (op) {
           case '=':
-            return rowValue == value;
+            return rowValue === compareValue;
           case '!=':
-            return rowValue != value;
+            return rowValue !== compareValue;
           case '>':
-            return rowValue > value;
+            return rowValue > compareValue;
           case '<':
-            return rowValue < value;
+            return rowValue < compareValue;
           case '>=':
-            return rowValue >= value;
+            return rowValue >= compareValue;
           case '<=':
-            return rowValue <= value;
-          case 'like':
-            const pattern = (value as string).replace(/%/g, '.*');
-            return new RegExp(`^${pattern}$`, 'i').test(String(rowValue));
-          default:
-            return false;
+            return rowValue <= compareValue;
         }
       }
     }
