@@ -16,7 +16,7 @@ async function main() {
 
   try {
     const stats = await fs.stat(inputPath);
-    
+
     // Create a new alasql database
     const db = new alasql.Database();
 
@@ -26,8 +26,10 @@ async function main() {
         if (file.endsWith('.csv')) {
           const filePath = path.join(inputPath, file);
           const fileContent = await fs.readFile(filePath, 'utf8');
+          const delimiter = fileContent.split('\n').at(0).includes(';') ? ';' : ','
           const records = await new Promise((resolve, reject) => {
             parse(fileContent, {
+              delimiter,
               columns: true,
               skip_empty_lines: true
             }, (err, records) => {
@@ -45,25 +47,6 @@ async function main() {
             await db.exec(`INSERT INTO ${tableName} (${columns}) VALUES (${values})`);
           }
         }
-      }
-    } else if (stats.isFile() && inputPath.endsWith('.csv')) {
-      const fileContent = await fs.readFile(inputPath, 'utf8');
-      const records = await new Promise((resolve, reject) => {
-        parse(fileContent, {
-          columns: true,
-          skip_empty_lines: true
-        }, (err, records) => {
-          if (err) reject(err);
-          else resolve(records);
-        });
-      });
-      const tableName = path.basename(inputPath, '.csv');
-      // Create table and insert data
-      await db.exec(`CREATE TABLE ${tableName}`);
-      for (const record of records) {
-        const columns = Object.keys(record).map(col => `\`${col}\``).join(', ');
-        const values = Object.values(record).map(val => `'${String(val).replace(/'/g, "''")}'`).join(', ');
-        await db.exec(`INSERT INTO ${tableName} (${columns}) VALUES (${values})`);
       }
     } else {
       console.error('Error: Provided path is neither a CSV file nor a directory containing CSV files.');
