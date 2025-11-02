@@ -158,8 +158,11 @@ export class SQLEngine {
       // Extract value from quotes
       const quoteMatch = afterLike.match(/^['"]([^'"]+)['"]$/);
       if (quoteMatch && column in row) {
-        const pattern = quoteMatch[1].replace(/%/g, '.*');
-        return new RegExp(`^${pattern}$`, 'i').test(String(row[column]));
+        // Escape regex special characters to prevent ReDoS
+        const escapedPattern = quoteMatch[1]
+          .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+          .replace(/%/g, '.*');
+        return new RegExp(`^${escapedPattern}$`, 'i').test(String(row[column]));
       }
       return false;
     }

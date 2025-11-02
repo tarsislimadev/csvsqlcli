@@ -2,7 +2,7 @@
 
 import { Command } from 'commander';
 import { CSVParser } from './csvParser';
-import { SQLEngine } from './sqlEngine';
+import { SQLEngine, QueryResult } from './sqlEngine';
 import * as fs from 'fs';
 
 const program = new Command();
@@ -74,7 +74,7 @@ program
     }
   });
 
-function displayResult(result: any, format: string): void {
+function displayResult(result: QueryResult, format: string): void {
   if (result.rows.length === 0) {
     console.log('\nNo results found.');
     return;
@@ -94,13 +94,13 @@ function displayResult(result: any, format: string): void {
   }
 }
 
-function displayTable(result: any): void {
+function displayTable(result: QueryResult): void {
   const columns = result.columns;
   const rows = result.rows;
 
   // Calculate column widths
   const widths = columns.map((col: string) => {
-    const dataWidths = rows.map((row: any) => String(row[col] || '').length);
+    const dataWidths = rows.map((row) => String(row[col] || '').length);
     return Math.max(col.length, ...dataWidths, 3);
   });
 
@@ -113,7 +113,7 @@ function displayTable(result: any): void {
   console.log(widths.map((w: number) => '-'.repeat(w)).join('-+-'));
 
   // Print rows
-  rows.forEach((row: any) => {
+  rows.forEach((row) => {
     const line = columns.map((col: string, i: number) => 
       String(row[col] || '').padEnd(widths[i])
     ).join(' | ');
@@ -121,12 +121,12 @@ function displayTable(result: any): void {
   });
 }
 
-function displayCSV(result: any): void {
+function displayCSV(result: QueryResult): void {
   const columns = result.columns;
   const rows = result.rows;
 
   console.log(columns.join(','));
-  rows.forEach((row: any) => {
+  rows.forEach((row) => {
     const values = columns.map((col: string) => {
       const value = String(row[col] || '');
       // Escape values containing comma or quotes

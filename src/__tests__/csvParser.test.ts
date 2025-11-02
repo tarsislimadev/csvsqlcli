@@ -18,7 +18,7 @@ describe('CSVParser', () => {
       fs.unlinkSync(testFile);
     }
     if (fs.existsSync(testDir)) {
-      fs.rmdirSync(testDir);
+      fs.rmSync(testDir, { recursive: true });
     }
   });
 
