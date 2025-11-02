@@ -1,11 +1,11 @@
 {
   "name": "csvsqlcli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Work on relational databases with CSV files",
+  "preferGlobal": true,
   "bin": {
-    "csvsqlcli": "index.js"
+    "csvsqlcli": "bin/csvsqlcli"
   },
-  "main": "index.js",
   "author": "Tarsis Lima (https://github.com/tarsislimadev)",
   "license": "MIT",
   "dependencies": {
