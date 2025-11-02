@@ -1,0 +1,84 @@
+#!/usr/bin/node
+
+const fs = require('fs').promises;
+const path = require('path');
+const { parse } = require('csv-parse');
+const alasql = require('alasql');
+
+async function main() {
+  const inputPath = process.argv[2];
+  const query = process.argv[3];
+
+  if (!inputPath || !query) {
+    console.error('Usage: node index.js <csv_file_or_directory_path> "<SQL_query>"');
+    process.exit(1);
+  }
+
+  try {
+    const stats = await fs.stat(inputPath);
+    
+    // Create a new alasql database
+    const db = new alasql.Database();
+
+    if (stats.isDirectory()) {
+      const files = await fs.readdir(inputPath);
+      for (const file of files) {
+        if (file.endsWith('.csv')) {
+          const filePath = path.join(inputPath, file);
+          const fileContent = await fs.readFile(filePath, 'utf8');
+          const records = await new Promise((resolve, reject) => {
+            parse(fileContent, {
+              columns: true,
+              skip_empty_lines: true
+            }, (err, records) => {
+              if (err) reject(err);
+              else resolve(records);
+            });
+          });
+          const tableName = path.basename(file, '.csv');
+          // Create table and insert data
+          await db.exec(`CREATE TABLE ${tableName}`);
+          for (const record of records) {
+            // Construct INSERT statement dynamically
+            const columns = Object.keys(record).map(col => `\`${col}\``).join(', ');
+            const values = Object.values(record).map(val => `'${String(val).replace(/'/g, "''")}'`).join(', ');
+            await db.exec(`INSERT INTO ${tableName} (${columns}) VALUES (${values})`);
+          }
+        }
+      }
+    } else if (stats.isFile() && inputPath.endsWith('.csv')) {
+      const fileContent = await fs.readFile(inputPath, 'utf8');
+      const records = await new Promise((resolve, reject) => {
+        parse(fileContent, {
+          columns: true,
+          skip_empty_lines: true
+        }, (err, records) => {
+          if (err) reject(err);
+          else resolve(records);
+        });
+      });
+      const tableName = path.basename(inputPath, '.csv');
+      // Create table and insert data
+      await db.exec(`CREATE TABLE ${tableName}`);
+      for (const record of records) {
+        const columns = Object.keys(record).map(col => `\`${col}\``).join(', ');
+        const values = Object.values(record).map(val => `'${String(val).replace(/'/g, "''")}'`).join(', ');
+        await db.exec(`INSERT INTO ${tableName} (${columns}) VALUES (${values})`);
+      }
+    } else {
+      console.error('Error: Provided path is neither a CSV file nor a directory containing CSV files.');
+      process.exit(1);
+    }
+
+    // Execute the query against the loaded database
+    const result = await db.exec(query);
+
+    console.log(JSON.stringify(result, null, 2));
+
+  } catch (error) {
+    console.error('An error occurred:', error);
+    process.exit(1);
+  }
+}
+
+main();
